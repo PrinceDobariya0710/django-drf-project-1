@@ -10,11 +10,13 @@ from rest_framework.permissions import (
 )
 from rest_framework import status, generics, mixins
 from rest_framework.decorators import api_view, APIView, permission_classes
+from accounts.serializers import CurrentUserPostsSerializer
 from posts.models import Post
 from posts.serializers import PostSerializer
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets
-from .permissions import ReadOnly
+from .permissions import ReadOnly, AuthorOrReadOnly
+from rest_framework.pagination import PageNumberPagination
 
 # Create your views here.
 
@@ -23,6 +25,12 @@ from .permissions import ReadOnly
 #     {"pk": 2, "title": "TestTitle", "content": "test", "auhtor": "test"},
 #     {"pk": 3, "title": "TestTitle", "content": "test", "auhtor": "test"},
 # ]
+
+
+class CustomPaginator(PageNumberPagination):
+    page_size = 4
+    page_query_param = "page"
+    page_size_query_param = "page_size"
 
 
 # When you use Request and Response from DRF its mandatory to use DRF's views
@@ -140,8 +148,13 @@ class PostListCreateView(
     """
 
     serializer_class = PostSerializer
-    permission_classes = [ReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly]
     queryset = Post.objects.all()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(author=user)
+        return super().perform_create(serializer)
 
     def get(self, request: Request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
@@ -158,6 +171,7 @@ class PostRetriveUpdateDeletView(
 ):
     serializer_class = PostSerializer
     queryset = Post.objects.all()
+    permission_classes = [AuthorOrReadOnly]
 
     def get(self, request: Request, *args, **kwargs):
         return self.retrieve(request, *args, **kwargs)
@@ -187,3 +201,32 @@ class PostRetriveUpdateDeletView(
 class PostViewSet(viewsets.ModelViewSet):
     queryset = Post.objects.all()
     serializer_class = PostSerializer
+
+
+@api_view(http_method_names=["GET"])
+@permission_classes([IsAuthenticated])
+def get_posts_for_current_user(request: Request):
+    user = request.user
+
+    serializer = CurrentUserPostsSerializer(instance=user, context={"request": request})
+    return Response(data=serializer.data, status=status.HTTP_200_OK)
+
+
+class ListPostsForAuthor(generics.GenericAPIView, mixins.ListModelMixin):
+
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+    pagination_class = CustomPaginator
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        username = self.request.query_params.get("username") or None
+        # user = self.kwargs.get("username")
+        queryset = Post.objects.all()
+        if username:
+            return Post.objects.filter(author__username=username)
+
+        return queryset
+
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
